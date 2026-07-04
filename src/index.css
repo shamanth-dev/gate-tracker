@@ -1,0 +1,26 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100vh;
+}
+
+/* Follows the theme set on <html data-theme="...">.
+   Falls back to the light paper color before React mounts. */
+:root {
+  --page-bg: #faf8f3;
+}
+[data-theme="dark"] {
+  --page-bg: #1a1917;
+}
+
+body {
+  background: var(--page-bg);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s ease;
+}
