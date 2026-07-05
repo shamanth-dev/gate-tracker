@@ -327,13 +327,16 @@ function Tracker({ user, theme, onToggleTheme }) {
   }, [focusCol]);
 
   const logFocusSession = useCallback(
-    async (minutes, label) => {
-      await addDoc(focusCol, {
+    async (minutes, label, planned, quality) => {
+      const doc_ = {
         minutes,
         label: label || "",
         startedAt: new Date().toISOString(),
         date: todayISO(),
-      });
+        planned: planned || minutes,
+      };
+      if (quality) doc_.quality = quality;
+      await addDoc(focusCol, doc_);
     },
     [focusCol]
   );
@@ -1634,17 +1637,16 @@ function LinksTabView({ resources, addResource, deleteResource }) {
 const QUICK_MINS = [3, 5, 10, 15, 20, 30, 45, 60];
 
 const STAGES = [
-  { min: 0,  max: 7,  label: "Starting out",   next: "5 min blocks",    color: "#9B59B6" },
-  { min: 7,  max: 12, label: "Building focus",  next: "10 min blocks",   color: "#7D3C98" },
-  { min: 12, max: 18, label: "Gaining traction",next: "15 min blocks",   color: "#1A5276" },
-  { min: 18, max: 25, label: "Solid sessions",  next: "25 min blocks",   color: "#1F618D" },
-  { min: 25, max: 35, label: "Deep work",       next: "35 min blocks",   color: "#117A65" },
-  { min: 35, max: 50, label: "Extended focus",  next: "50 min blocks",   color: "#0E6655" },
-  { min: 50, max: 999,"label":"Flow state",     next: "sustained 60+",   color: "#1D9E75" },
+  { min: 0,  max: 7,  label: "Starting out",    next: "5 min blocks",  color: "#9B59B6" },
+  { min: 7,  max: 12, label: "Building focus",   next: "10 min blocks", color: "#7D3C98" },
+  { min: 12, max: 18, label: "Gaining traction", next: "15 min blocks", color: "#1A5276" },
+  { min: 18, max: 25, label: "Solid sessions",   next: "25 min blocks", color: "#1F618D" },
+  { min: 25, max: 35, label: "Deep work",        next: "35 min blocks", color: "#117A65" },
+  { min: 35, max: 50, label: "Extended focus",   next: "50 min blocks", color: "#0E6655" },
+  { min: 50, max: 999,label: "Flow state",       next: "sustained 60+", color: "#1D9E75" },
 ];
 
 function sessionColor(minutes) {
-  // violet (short) → teal (long), mapped across 3–60 min range
   const t = Math.min(1, Math.max(0, (minutes - 3) / 57));
   const r = Math.round(148 - t * (148 - 29));
   const g = Math.round(33  + t * (158 - 33));
@@ -1652,130 +1654,274 @@ function sessionColor(minutes) {
   return `rgb(${r},${g},${b})`;
 }
 
+// ---- Tree rings SVG (all-time sessions) ----
 function TreeRings({ sessions }) {
-  const SIZE = 260;
-  const cx = SIZE / 2;
-  const cy = SIZE / 2;
-  const MIN_R = 18;
-  const MAX_R = 118;
-  const MAX_RINGS = 28;
+  const SIZE = 260, cx = 130, cy = 130, MIN_R = 18, MAX_R = 118, MAX_RINGS = 28;
   const shown = sessions.slice(0, MAX_RINGS);
   const total = shown.length;
   const step = total > 1 ? (MAX_R - MIN_R) / total : 0;
-
   return (
-    <svg
-      width={SIZE}
-      height={SIZE}
-      viewBox={`0 0 ${SIZE} ${SIZE}`}
-      style={{ display: "block", margin: "0 auto" }}
-    >
-      {/* Base circle */}
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}
+      style={{ display: "block", margin: "0 auto" }}>
       <circle cx={cx} cy={cy} r={MIN_R - 3} fill="var(--track)" />
       {shown.map((s, i) => {
         const r = MIN_R + (total - 1 - i) * step;
         const thickness = Math.max(2, Math.min(8, s.minutes / 10));
         return (
-          <circle
-            key={s.id}
-            cx={cx}
-            cy={cy}
-            r={r}
-            fill="none"
-            stroke={sessionColor(s.minutes)}
-            strokeWidth={thickness}
-            opacity={0.85}
-          >
-            <title>{s.minutes} min{s.label ? ` · ${s.label}` : ""} · {s.date}</title>
+          <circle key={s.id} cx={cx} cy={cy} r={r} fill="none"
+            stroke={sessionColor(s.minutes)} strokeWidth={thickness} opacity={0.85}>
+            <title>{s.minutes} min{s.label ? ` · ${s.label}` : ""}
+              {s.quality ? ` · quality ${s.quality}/3` : ""} · {s.date}</title>
           </circle>
         );
       })}
-      {/* Centre label */}
-      <text
-        x={cx}
-        y={cy - 5}
-        textAnchor="middle"
-        fill="var(--ink)"
-        fontSize={sessions.length > 0 ? 18 : 13}
-        fontWeight="600"
-        fontFamily="Georgia, serif"
-      >
-        {sessions.length > 0 ? sessions.length : ""}
+      <text x={cx} y={cy - 5} textAnchor="middle" fill="var(--ink)"
+        fontSize={sessions.length ? 18 : 13} fontWeight="600" fontFamily="Georgia,serif">
+        {sessions.length || ""}
       </text>
-      <text
-        x={cx}
-        y={cy + 12}
-        textAnchor="middle"
-        fill="var(--dim)"
-        fontSize={10}
-        fontFamily="ui-monospace, monospace"
-      >
-        {sessions.length > 0 ? "sessions" : "no sessions yet"}
+      <text x={cx} y={cy + 12} textAnchor="middle" fill="var(--dim)"
+        fontSize={10} fontFamily="ui-monospace,monospace">
+        {sessions.length ? "sessions" : "no sessions yet"}
       </text>
     </svg>
   );
 }
 
+// ---- 7-day bar chart ----
+function WeekChart({ sessions }) {
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  const totals = days.map(date =>
+    sessions.filter(s => s.date === date).reduce((a, s) => a + s.minutes, 0)
+  );
+  const max = Math.max(...totals, 1);
+  const W = 280, H = 80, barW = 28, gap = 12;
+  const totalW = days.length * (barW + gap) - gap;
+  const offsetX = (W - totalW) / 2;
+
+  return (
+    <svg width={W} height={H + 24} viewBox={`0 0 ${W} ${H + 24}`}
+      style={{ display: "block", margin: "0 auto" }}>
+      {days.map((date, i) => {
+        const x = offsetX + i * (barW + gap);
+        const barH = Math.max(3, (totals[i] / max) * H);
+        const y = H - barH;
+        const isToday = date === new Date().toISOString().slice(0, 10);
+        const label = new Date(date + "T00:00:00").toLocaleDateString("en",
+          { weekday: "short" }).slice(0, 2);
+        return (
+          <g key={date}>
+            <rect x={x} y={y} width={barW} height={barH} rx={4}
+              fill={isToday ? "#1D9E75" : "var(--track)"}
+              stroke={isToday ? "#1D9E75" : "var(--line)"} strokeWidth={1}>
+              <title>{date}: {totals[i]} min</title>
+            </rect>
+            {totals[i] > 0 && (
+              <text x={x + barW / 2} y={y - 3} textAnchor="middle"
+                fill="var(--ink-soft)" fontSize={8} fontFamily="ui-monospace,monospace">
+                {totals[i]}
+              </text>
+            )}
+            <text x={x + barW / 2} y={H + 16} textAnchor="middle"
+              fill={isToday ? "#1D9E75" : "var(--dim)"}
+              fontSize={9} fontFamily="ui-monospace,monospace">
+              {label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ---- Countdown timer ring ----
+function TimerRing({ totalSecs, remainingSecs, running, paused }) {
+  const SIZE = 200, cx = 100, cy = 100, R = 82, stroke = 10;
+  const circ = 2 * Math.PI * R;
+  const progress = totalSecs > 0 ? remainingSecs / totalSecs : 1;
+  const dash = circ * progress;
+  const gap = circ * (1 - progress);
+  const mins = Math.floor(remainingSecs / 60);
+  const secs = remainingSecs % 60;
+  const color = running ? "#1D9E75" : paused ? "#BA7517" : "var(--dim)";
+
+  return (
+    <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}
+      style={{ display: "block", margin: "0 auto" }}>
+      <circle cx={cx} cy={cy} r={R} fill="none"
+        stroke="var(--track)" strokeWidth={stroke} />
+      <circle cx={cx} cy={cy} r={R} fill="none"
+        stroke={color} strokeWidth={stroke}
+        strokeDasharray={`${dash} ${gap}`}
+        strokeLinecap="round"
+        transform={`rotate(-90 ${cx} ${cy})`}
+        style={{ transition: "stroke-dasharray 0.5s linear, stroke 0.3s" }} />
+      <text x={cx} y={cy - 8} textAnchor="middle"
+        fill="var(--ink)" fontSize={32} fontWeight="700" fontFamily="Georgia,serif">
+        {String(mins).padStart(2, "0")}:{String(secs).padStart(2, "0")}
+      </text>
+      <text x={cx} y={cy + 16} textAnchor="middle"
+        fill="var(--dim)" fontSize={11} fontFamily="ui-monospace,monospace">
+        {running ? "focus" : paused ? "paused" : "ready"}
+      </text>
+    </svg>
+  );
+}
+
+// ---- Main FocusTab ----
 function FocusTab({ sessions, loaded, onLog, onDelete }) {
-  const [custom, setCustom] = useState("");
+  // Timer state
+  const [selectedMins, setSelectedMins] = useState(null);
+  const [customMins, setCustomMins] = useState("");
   const [label, setLabel] = useState("");
-  const [selected, setSelected] = useState(null);
-  const [logging, setLogging] = useState(false);
+  const [remainingSecs, setRemainingSecs] = useState(0);
+  const [totalSecs, setTotalSecs] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [phase, setPhase] = useState("idle"); // idle | running | done | break
+  const [breakSecs, setBreakSecs] = useState(0);
+  const [breakRemaining, setBreakRemaining] = useState(0);
   const [confirmId, setConfirmId] = useState(null);
 
-  const today = todayISO();
+  const intervalRef = React.useRef(null);
 
-  const todaySessions = sessions.filter((s) => s.date === today);
+  const effectiveMins = selectedMins === "custom"
+    ? parseInt(customMins, 10) || 0
+    : selectedMins || 0;
+
+  // Break duration: 5 min for ≤20, 10 for ≤45, 15 for 60+
+  const breakMinsFor = (m) => m <= 20 ? 5 : m <= 45 ? 10 : 15;
+
+  const startTimer = () => {
+    if (!effectiveMins) return;
+    const secs = effectiveMins * 60;
+    setTotalSecs(secs);
+    setRemainingSecs(secs);
+    setRunning(true);
+    setPaused(false);
+    setPhase("running");
+  };
+
+  const pauseResume = () => {
+    if (paused) {
+      setRunning(true);
+      setPaused(false);
+    } else {
+      setRunning(false);
+      setPaused(true);
+    }
+  };
+
+  const stopTimer = () => {
+    clearInterval(intervalRef.current);
+    setRunning(false);
+    setPaused(false);
+    setPhase("idle");
+    setRemainingSecs(0);
+    setTotalSecs(0);
+  };
+
+  // Tick
+  useEffect(() => {
+    if (!running) { clearInterval(intervalRef.current); return; }
+    intervalRef.current = setInterval(() => {
+      setRemainingSecs(prev => {
+        if (prev <= 1) {
+          clearInterval(intervalRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(intervalRef.current);
+  }, [running]);
+
+  // Auto-log when timer hits zero
+  useEffect(() => {
+    if (phase === "running" && remainingSecs === 0 && totalSecs > 0) {
+      const mins = Math.round(totalSecs / 60);
+      const planned = effectiveMins;
+      onLog(mins, label, planned, null); // quality added in break phase
+      setRunning(false);
+      setPaused(false);
+      setPhase("done");
+      const bm = breakMinsFor(mins);
+      setBreakSecs(bm * 60);
+      setBreakRemaining(bm * 60);
+      // Beep via Web Audio API
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        [523, 659, 784].forEach((freq, i) => {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.connect(g); g.connect(ctx.destination);
+          o.frequency.value = freq;
+          o.type = "sine";
+          g.gain.setValueAtTime(0.18, ctx.currentTime + i * 0.18);
+          g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.18 + 0.4);
+          o.start(ctx.currentTime + i * 0.18);
+          o.stop(ctx.currentTime + i * 0.18 + 0.4);
+        });
+      } catch (_) {}
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remainingSecs]);
+
+  // Break countdown
+  useEffect(() => {
+    if (phase !== "break") return;
+    const t = setInterval(() => {
+      setBreakRemaining(p => {
+        if (p <= 1) { clearInterval(t); setPhase("idle"); return 0; }
+        return p - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+
+  const startBreak = () => setPhase("break");
+  const skipBreak = () => { setPhase("idle"); };
+
+  const today = todayISO();
+  const todaySessions = sessions.filter(s => s.date === today);
   const todayMins = todaySessions.reduce((a, s) => a + s.minutes, 0);
 
-  // Streak: count consecutive days going back from today
   const streak = useMemo(() => {
-    const days = new Set(sessions.map((s) => s.date));
-    let count = 0;
-    let d = new Date();
+    const days = new Set(sessions.map(s => s.date));
+    let count = 0, d = new Date();
     while (true) {
       const iso = d.toISOString().slice(0, 10);
       if (!days.has(iso)) break;
-      count++;
-      d.setDate(d.getDate() - 1);
+      count++; d.setDate(d.getDate() - 1);
     }
     return count;
   }, [sessions]);
 
-  // Stage: average of last 7 sessions
   const avgMins = useMemo(() => {
     const recent = sessions.slice(0, 7);
     if (!recent.length) return 0;
     return recent.reduce((a, s) => a + s.minutes, 0) / recent.length;
   }, [sessions]);
 
-  const stage = STAGES.find((s) => avgMins >= s.min && avgMins < s.max)
-    || STAGES[STAGES.length - 1];
+  const stage = STAGES.find(s => avgMins >= s.min && avgMins < s.max) || STAGES[STAGES.length - 1];
   const nextStage = STAGES[STAGES.indexOf(stage) + 1];
 
-  const handleLog = async () => {
-    const mins = selected === "custom"
-      ? parseInt(custom, 10)
-      : selected;
-    if (!mins || mins <= 0) return;
-    setLogging(true);
-    await onLog(mins, label);
-    setLabel("");
-    setCustom("");
-    setSelected(null);
-    setLogging(false);
-  };
+  const plannedVsActual = useMemo(() => {
+    const with2 = sessions.filter(s => s.planned && s.planned > 0);
+    if (!with2.length) return null;
+    const ratio = with2.reduce((a, s) => a + s.minutes / s.planned, 0) / with2.length;
+    return Math.round(ratio * 100);
+  }, [sessions]);
 
   if (!loaded) return <p style={fStyles.empty}>Loading focus sessions…</p>;
 
   return (
     <div>
-      <p style={fStyles.intro}>
-        Log a focus block. Each session becomes a ring — short blocks start
-        violet, long ones turn teal. Build up gradually.
-      </p>
-
-      {/* Stats row */}
+      {/* Stats */}
       <div style={fStyles.statsRow}>
         <div style={fStyles.statBox}>
           <div style={fStyles.statNum}>{streak}</div>
@@ -1783,98 +1929,151 @@ function FocusTab({ sessions, loaded, onLog, onDelete }) {
         </div>
         <div style={fStyles.statBox}>
           <div style={fStyles.statNum}>{todaySessions.length}</div>
-          <div style={fStyles.statLabel}>sessions today</div>
+          <div style={fStyles.statLabel}>today</div>
         </div>
         <div style={fStyles.statBox}>
           <div style={fStyles.statNum}>{todayMins}</div>
           <div style={fStyles.statLabel}>mins today</div>
         </div>
-        <div style={fStyles.statBox}>
-          <div style={fStyles.statNum}>{sessions.length}</div>
-          <div style={fStyles.statLabel}>total sessions</div>
-        </div>
+        {plannedVsActual !== null ? (
+          <div style={fStyles.statBox}>
+            <div style={{ ...fStyles.statNum,
+              color: plannedVsActual >= 90 ? "#1D9E75" : "#BA7517" }}>
+              {plannedVsActual}%
+            </div>
+            <div style={fStyles.statLabel}>completion</div>
+          </div>
+        ) : (
+          <div style={fStyles.statBox}>
+            <div style={fStyles.statNum}>{sessions.length}</div>
+            <div style={fStyles.statLabel}>all sessions</div>
+          </div>
+        )}
       </div>
 
-      {/* Stage badge */}
+      {/* Stage */}
       <div style={{ ...fStyles.stageBadge, borderColor: stage.color }}>
-        <span style={{ ...fStyles.stageLabel, color: stage.color }}>
-          {stage.label}
-        </span>
-        <span style={fStyles.stageAvg}>
-          avg {Math.round(avgMins)} min/session (last 7)
-        </span>
+        <span style={{ ...fStyles.stageLabel, color: stage.color }}>{stage.label}</span>
+        <span style={fStyles.stageAvg}>avg {Math.round(avgMins)} min (last 7)</span>
         {nextStage && (
-          <span style={fStyles.stageNext}>
-            → next: {nextStage.label} ({nextStage.next})
-          </span>
+          <span style={fStyles.stageNext}>→ next: {nextStage.label}</span>
         )}
+      </div>
+
+      {/* Timer */}
+      {phase === "idle" && (
+        <div style={fStyles.timerCard}>
+          <div style={fStyles.quickRow}>
+            {QUICK_MINS.map(m => (
+              <button key={m}
+                className={selectedMins === m ? "pill pill-accent" : "pill"}
+                style={{ color: selectedMins === m ? "#0F6E56" : sessionColor(m) }}
+                onClick={() => { setSelectedMins(m); setCustomMins(""); }}>
+                {m}m
+              </button>
+            ))}
+            <button
+              className={selectedMins === "custom" ? "pill pill-accent" : "pill pill-quiet"}
+              onClick={() => setSelectedMins("custom")}>
+              custom
+            </button>
+          </div>
+          {selectedMins === "custom" && (
+            <input className="note" type="number" min="1" placeholder="minutes"
+              value={customMins} onChange={e => setCustomMins(e.target.value)}
+              style={{ marginLeft: 0, maxWidth: 110 }} />
+          )}
+          <input className="note" placeholder="topic / task label (optional)"
+            value={label} onChange={e => setLabel(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && startTimer()}
+            style={{ marginLeft: 0, maxWidth: "100%" }} />
+          <button className="add-btn add-btn-strong"
+            onClick={startTimer}
+            disabled={!effectiveMins}
+            style={{ opacity: effectiveMins ? 1 : 0.4 }}>
+            Start {effectiveMins ? `${effectiveMins} min` : ""} session
+          </button>
+        </div>
+      )}
+
+      {(phase === "running" || phase === "break") && (
+        <div style={fStyles.timerCard}>
+          {phase === "running" ? (
+            <>
+              {label && <p style={fStyles.timerLabel}>{label}</p>}
+              <TimerRing totalSecs={totalSecs} remainingSecs={remainingSecs}
+                running={running} paused={paused} />
+              <div style={fStyles.timerBtns}>
+                <button className="pill" onClick={pauseResume}>
+                  {paused ? "▶ Resume" : "⏸ Pause"}
+                </button>
+                <button className="pill pill-quiet" onClick={stopTimer}>
+                  ✕ Cancel
+                </button>
+              </div>
+              <p style={fStyles.timerHint}>
+                Will auto-log when the timer ends.
+              </p>
+            </>
+          ) : (
+            <>
+              <p style={{ ...fStyles.timerLabel, color: "#1D9E75" }}>
+                ✓ Session logged! Take a break.
+              </p>
+              <TimerRing totalSecs={breakSecs} remainingSecs={breakRemaining}
+                running={true} paused={false} />
+              <p style={fStyles.timerHint}>
+                {Math.ceil(breakRemaining / 60)} min break recommended.
+              </p>
+              <div style={fStyles.timerBtns}>
+                <button className="add-btn add-btn-strong" onClick={skipBreak}>
+                  Start next session
+                </button>
+                <button className="pill pill-quiet" onClick={skipBreak}>
+                  Skip break
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Completed — show completion card briefly */}
+      {phase === "done" && (
+        <div style={fStyles.timerCard}>
+          <p style={{ ...fStyles.timerLabel, color: "#1D9E75", textAlign: "center" }}>
+            ✓ {effectiveMins} min session logged!
+          </p>
+          <div style={fStyles.timerBtns}>
+            <button className="add-btn add-btn-strong" onClick={startBreak}>
+              ☕ Take a {breakMinsFor(effectiveMins)} min break
+            </button>
+            <button className="pill pill-quiet" onClick={skipBreak}>
+              Skip break
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 7-day chart */}
+      <div style={fStyles.chartWrap}>
+        <div style={fStyles.chartTitle}>Last 7 days (minutes)</div>
+        <WeekChart sessions={sessions} />
       </div>
 
       {/* Tree rings */}
       <div style={fStyles.ringsWrap}>
+        <div style={fStyles.chartTitle}>Session rings (newest → centre)</div>
         <TreeRings sessions={sessions} />
         <p style={fStyles.ringsCaption}>
-          {sessions.length === 0
-            ? "Log your first session to grow your first ring."
-            : `${Math.min(28, sessions.length)} most recent sessions shown as rings.`}
+          Colour: violet = short, teal = long. Hover a ring for details.
+          {sessions.length > 28 ? " Showing 28 most recent." : ""}
         </p>
       </div>
 
-      {/* Logger */}
-      <div style={fStyles.loggerCard}>
-        <div style={fStyles.quickRow}>
-          {QUICK_MINS.map((m) => (
-            <button
-              key={m}
-              className={selected === m ? "pill pill-accent" : "pill"}
-              style={{ color: selected === m ? "#0F6E56" : sessionColor(m) }}
-              onClick={() => { setSelected(m); setCustom(""); }}
-            >
-              {m}m
-            </button>
-          ))}
-          <button
-            className={selected === "custom" ? "pill pill-accent" : "pill pill-quiet"}
-            onClick={() => setSelected("custom")}
-          >
-            custom
-          </button>
-        </div>
-
-        {selected === "custom" && (
-          <input
-            className="note"
-            type="number"
-            min="1"
-            placeholder="minutes"
-            value={custom}
-            onChange={(e) => setCustom(e.target.value)}
-            style={{ marginLeft: 0, maxWidth: 120 }}
-          />
-        )}
-
-        <input
-          className="note"
-          placeholder="topic / task label (optional)"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleLog()}
-          style={{ marginLeft: 0, maxWidth: "100%" }}
-        />
-
-        <button
-          className="add-btn add-btn-strong"
-          onClick={handleLog}
-          disabled={logging || !selected || (selected === "custom" && !custom)}
-          style={{ opacity: logging || !selected ? 0.5 : 1 }}
-        >
-          {logging ? "Logging…" : "Log session"}
-        </button>
-      </div>
-
-      {/* Legend */}
+      {/* Colour legend */}
       <div style={fStyles.legendRow}>
-        {[3, 15, 30, 60].map((m) => (
+        {[3, 15, 30, 60].map(m => (
           <span key={m} style={fStyles.legendItem}>
             <span style={{ ...fStyles.legendDot, background: sessionColor(m) }} />
             {m}m
@@ -1886,36 +2085,28 @@ function FocusTab({ sessions, loaded, onLog, onDelete }) {
       {sessions.length > 0 && (
         <div style={fStyles.sessionList}>
           <div style={fStyles.sessionListHead}>Recent sessions</div>
-          {sessions.map((s) => (
+          {sessions.map(s => (
             <div key={s.id} style={fStyles.sessionRow}>
-              <span
-                style={{ ...fStyles.sessionDot, background: sessionColor(s.minutes) }}
-              />
+              <span style={{ ...fStyles.sessionDot, background: sessionColor(s.minutes) }} />
               <span style={fStyles.sessionMins}>{s.minutes}m</span>
+              {s.planned && s.planned !== s.minutes && (
+                <span style={fStyles.sessionPlanned}>/ {s.planned}m planned</span>
+              )}
               <span style={fStyles.sessionLabel}>{s.label || "—"}</span>
               <span style={fStyles.sessionDate}>{s.date}</span>
               {confirmId === s.id ? (
                 <>
-                  <button
-                    className="pill pill-danger"
-                    onClick={() => { onDelete(s.id); setConfirmId(null); }}
-                  >
+                  <button className="pill pill-danger"
+                    onClick={() => { onDelete(s.id); setConfirmId(null); }}>
                     Confirm
                   </button>
-                  <button
-                    className="pill pill-quiet"
-                    onClick={() => setConfirmId(null)}
-                  >
+                  <button className="pill pill-quiet"
+                    onClick={() => setConfirmId(null)}>
                     Cancel
                   </button>
                 </>
               ) : (
-                <button
-                  className="link-x"
-                  onClick={() => setConfirmId(s.id)}
-                >
-                  ×
-                </button>
+                <button className="link-x" onClick={() => setConfirmId(s.id)}>×</button>
               )}
             </div>
           ))}
@@ -1926,157 +2117,86 @@ function FocusTab({ sessions, loaded, onLog, onDelete }) {
 }
 
 const fStyles = {
-  intro: {
-    fontSize: 14,
-    color: "var(--ink-soft)",
-    marginBottom: 16,
-    lineHeight: 1.5,
-  },
+  intro: { fontSize: 14, color: "var(--ink-soft)", marginBottom: 16, lineHeight: 1.5 },
   statsRow: {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
-    gap: 10,
-    marginBottom: 16,
+    display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
+    gap: 10, marginBottom: 16,
   },
   statBox: {
-    background: "var(--card)",
-    border: "1px solid var(--line)",
-    borderRadius: 10,
-    padding: "10px 8px",
-    textAlign: "center",
+    background: "var(--card)", border: "1px solid var(--line)",
+    borderRadius: 10, padding: "10px 8px", textAlign: "center",
   },
-  statNum: {
-    fontSize: 22,
-    fontWeight: 600,
-    color: "var(--ink)",
-    lineHeight: 1,
-  },
+  statNum: { fontSize: 22, fontWeight: 600, color: "var(--ink)", lineHeight: 1 },
   statLabel: {
-    fontSize: 10,
-    color: "var(--dim)",
-    fontFamily: "ui-monospace, monospace",
-    marginTop: 5,
+    fontSize: 10, color: "var(--dim)",
+    fontFamily: "ui-monospace,monospace", marginTop: 5,
   },
   stageBadge: {
-    border: "1.5px solid",
-    borderRadius: 10,
-    padding: "10px 14px",
-    marginBottom: 20,
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 8,
-    alignItems: "center",
-    background: "var(--card)",
+    border: "1.5px solid", borderRadius: 10, padding: "10px 14px",
+    marginBottom: 20, display: "flex", flexWrap: "wrap",
+    gap: 8, alignItems: "center", background: "var(--card)",
   },
-  stageLabel: {
-    fontWeight: 600,
-    fontSize: 14,
+  stageLabel: { fontWeight: 600, fontSize: 14 },
+  stageAvg: { fontFamily: "ui-monospace,monospace", fontSize: 11, color: "var(--dim)" },
+  stageNext: { fontFamily: "ui-monospace,monospace", fontSize: 11, color: "var(--ink-faint)" },
+  timerCard: {
+    background: "var(--card)", border: "1px solid var(--line)",
+    borderRadius: 16, padding: "20px 16px", marginBottom: 20,
+    display: "flex", flexDirection: "column", gap: 12,
   },
-  stageAvg: {
-    fontFamily: "ui-monospace, monospace",
-    fontSize: 11,
-    color: "var(--dim)",
+  timerLabel: {
+    fontFamily: "Georgia, serif", fontSize: 15,
+    color: "var(--ink-soft)", margin: 0, textAlign: "center",
   },
-  stageNext: {
-    fontFamily: "ui-monospace, monospace",
-    fontSize: 11,
-    color: "var(--ink-faint)",
+  timerBtns: { display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" },
+  timerHint: {
+    fontFamily: "ui-monospace,monospace", fontSize: 11,
+    color: "var(--dim)", textAlign: "center", margin: 0,
   },
-  ringsWrap: {
-    marginBottom: 20,
-    textAlign: "center",
+  quickRow: { display: "flex", flexWrap: "wrap", gap: 6 },
+  chartWrap: { marginBottom: 20 },
+  chartTitle: {
+    fontFamily: "ui-monospace,monospace", fontSize: 11,
+    color: "var(--dim)", marginBottom: 8,
+    textTransform: "uppercase", letterSpacing: "0.06em",
   },
+  ringsWrap: { marginBottom: 16, textAlign: "center" },
   ringsCaption: {
-    fontSize: 11,
-    color: "var(--dim)",
-    fontFamily: "ui-monospace, monospace",
-    marginTop: 8,
-  },
-  loggerCard: {
-    background: "var(--card)",
-    border: "1px solid var(--line)",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 14,
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-  },
-  quickRow: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 6,
+    fontSize: 11, color: "var(--dim)",
+    fontFamily: "ui-monospace,monospace", marginTop: 8,
   },
   legendRow: {
-    display: "flex",
-    gap: 14,
-    marginBottom: 20,
-    alignItems: "center",
-    flexWrap: "wrap",
+    display: "flex", gap: 14, marginBottom: 20,
+    alignItems: "center", flexWrap: "wrap",
   },
   legendItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: 5,
-    fontFamily: "ui-monospace, monospace",
-    fontSize: 11,
-    color: "var(--ink-soft)",
+    display: "flex", alignItems: "center", gap: 5,
+    fontFamily: "ui-monospace,monospace", fontSize: 11, color: "var(--ink-soft)",
   },
-  legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: "50%",
-    display: "inline-block",
-  },
-  sessionList: {
-    borderTop: "1px solid var(--line)",
-    paddingTop: 12,
-  },
+  legendDot: { width: 10, height: 10, borderRadius: "50%", display: "inline-block" },
+  sessionList: { borderTop: "1px solid var(--line)", paddingTop: 12 },
   sessionListHead: {
-    fontFamily: "ui-monospace, monospace",
-    fontSize: 11,
-    color: "var(--dim)",
-    marginBottom: 8,
-    letterSpacing: "0.06em",
-    textTransform: "uppercase",
+    fontFamily: "ui-monospace,monospace", fontSize: 11, color: "var(--dim)",
+    marginBottom: 8, letterSpacing: "0.06em", textTransform: "uppercase",
   },
   sessionRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "7px 0",
-    borderBottom: "1px solid var(--line-soft)",
-    flexWrap: "wrap",
+    display: "flex", alignItems: "center", gap: 8,
+    padding: "7px 0", borderBottom: "1px solid var(--line-soft)", flexWrap: "wrap",
   },
-  sessionDot: {
-    width: 10,
-    height: 10,
-    borderRadius: "50%",
-    flexShrink: 0,
-  },
+  sessionDot: { width: 10, height: 10, borderRadius: "50%", flexShrink: 0 },
   sessionMins: {
-    fontFamily: "ui-monospace, monospace",
-    fontSize: 13,
-    fontWeight: 600,
-    minWidth: 32,
-    color: "var(--ink)",
+    fontFamily: "ui-monospace,monospace", fontSize: 13,
+    fontWeight: 600, minWidth: 32, color: "var(--ink)",
   },
-  sessionLabel: {
-    fontSize: 13,
-    color: "var(--ink-soft)",
-    flex: 1,
+  sessionPlanned: {
+    fontFamily: "ui-monospace,monospace", fontSize: 11, color: "var(--dim)",
   },
-  sessionDate: {
-    fontFamily: "ui-monospace, monospace",
-    fontSize: 11,
-    color: "var(--dim)",
-  },
-  empty: {
-    color: "var(--dim)",
-    fontSize: 14,
-    padding: "20px 0",
-  },
+  sessionLabel: { fontSize: 13, color: "var(--ink-soft)", flex: 1 },
+  sessionDate: { fontFamily: "ui-monospace,monospace", fontSize: 11, color: "var(--dim)" },
+  empty: { color: "var(--dim)", fontSize: 14, padding: "20px 0" },
 };
+
+
 
 function Stat({ label, value, accent }) {
   return (
